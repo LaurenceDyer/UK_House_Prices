@@ -1,0 +1,473 @@
+---
+title: "UK_House_Price"
+output: 
+  html_document:
+    toc: TRUE
+    toc_float: TRUE
+    theme: paper
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+require("TTR")
+require(astsa)
+require(TSA)
+require(reshape2)
+require(ggplot2)
+require(readr)
+require(viridis)
+require(lubridate)
+require(grid)
+library(plotly)
+require(grid)
+require(forecast)
+require(gridExtra)
+
+```
+
+***
+
+# 1. Introduction - About Dataset
+
+***
+
+In this report we'll attempt to perform EDA on UK house prices between the years of 1995 and 2021 on a location-by-location basis in the West Country counties (Cornwall, Devon, Dorset, Somerset, Wiltshire, Gloucestershire and Avon*), as compared with many other factors including economic indicators such as local income and education levels, as well as population statistics such as age, family size and etc.
+
+We have around 2,400,000 individual house purchases registered over this period of time.
+
+*Avon is no longer a county as of 2022, but was in 1995 and is recorded throughout the data as such. It contains the cities of Bristol and Bath, and was split up into parts of Gloucestershire and Somerset, as well as the city metropolitan county of Bristol in 1996. In this dataset, we will combine these counties back into Avon, as we do not have enough resolution of detail to split Avon for the years 1995 and 1996.
+<br><br>
+Code used to generate this document available at: https://github.com/LaurenceDyer/UK_House_Prices
+
+Data for inflation derived from ONS statistics. 
+
+Data for house prices paid derived from the HM Land Registry Price Paid Data.
+
+```{r Data Input, echo=F}
+
+setwd("C:/Users/laure/Desktop/python/UK house price/")
+
+#large_all <- readr::read_csv("Input_Reduced.csv")[,-1]
+##We must individually add each year after 2017 that is not present in the initial data.
+#y2017_2 <- read.csv("pp-2017-part2.csv", header = F)[,-c(4,8,9,10,11)]
+#colnames(y2017_2) <- colnames(large_all)
+#y2017_2 <- y2017_2[y2017_2$County %in% c("SOMERSET","WILTSHIRE","GLOUCESTERSHIRE","DORSET","DEVON","CORNWALL",
+#                                         "AVON","BATH AND NORTH EAST SOMERSET","CITY OF BRISTOL","NORTH SOMERSET","SOUTH GLOUCESTERSHIRE"),]
+
+#y2018 <- read.csv("pp-2018.csv", header = F)[,-c(4,8,9,10,11)]
+#colnames(y2018) <- colnames(large_all)
+#y2018 <- y2018[y2018$County %in% c("SOMERSET","WILTSHIRE","GLOUCESTERSHIRE","DORSET","DEVON","CORNWALL",
+#                                   "AVON","BATH AND NORTH EAST SOMERSET","CITY OF BRISTOL","NORTH SOMERSET","SOUTH GLOUCESTERSHIRE"),]
+
+#y2019 <- read.csv("pp-2019.csv", header = F)[,-c(4,8,9,10,11)]
+#colnames(y2019) <- colnames(large_all)
+#y2019 <- y2019[y2019$County %in% c("SOMERSET","WILTSHIRE","GLOUCESTERSHIRE","DORSET","DEVON","CORNWALL",
+#                                   "AVON","BATH AND NORTH EAST SOMERSET","CITY OF BRISTOL","NORTH SOMERSET","SOUTH GLOUCESTERSHIRE"),]
+
+#y2020 <- read.csv("pp-2020.csv", header = F)[,-c(4,8,9,10,11)]
+#colnames(y2020) <- colnames(large_all)
+#y2020 <- y2020[y2020$County %in% c("SOMERSET","WILTSHIRE","GLOUCESTERSHIRE","DORSET","DEVON","CORNWALL",
+#                                   "AVON","BATH AND NORTH EAST SOMERSET","CITY OF BRISTOL","NORTH SOMERSET","SOUTH GLOUCESTERSHIRE"),]
+
+#y2021 <- read.csv("pp-2021.csv", header = F)[,-c(4,8,9,10,11)]
+#colnames(y2021) <- colnames(large_all)
+#y2021 <- y2021[y2021$County %in% c("SOMERSET","WILTSHIRE","GLOUCESTERSHIRE","DORSET","DEVON","CORNWALL",
+#                                   "AVON","BATH AND NORTH EAST SOMERSET","CITY OF BRISTOL","NORTH SOMERSET","SOUTH GLOUCESTERSHIRE"),]
+
+#large_all <- rbind(rbind(rbind(rbind(rbind(large_all,y2017_2),y2018),y2019),y2020),y2021)
+
+#large_all[large_all$County %in% c("BATH AND NORTH EAST SOMERSET","CITY OF BRISTOL","NORTH SOMERSET","SOUTH GLOUCESTERSHIRE"),]$County <- "AVON"
+
+#save(large_all, file = "Input_UK_HousePrice.RData")
+```
+
+```{r Data Input2}
+load("Input_UK_HousePrice.RData")
+
+large_all$Year <- year(large_all$`Date of Transfer`)
+large_all$Month <- month(large_all$`Date of Transfer`)
+
+inflate <- read.csv("UK_Inflation_1995_2017.csv", header = F)
+colnames(inflate) <- c("Year","Multiplier")
+
+```
+
+# 2. Price Paid Overview
+
+## Price Record Summary
+
+The price column of our dataset is perhaps the most interesting. When examining the data, we see a truly remarkable range, with some properties appearing be sold for £1, and others being sold for £50 million. Such outliers are interesting per se, but are most likely not particularly informative when considering the data as a whole. As such, we will remove the top and bottom 0.5% of our price range, leaving us with 99% of data remaining, which ought to be acceptable for an overview.
+
+We will return to these extremely expensive property sales later.
+
+```{r DatRange}
+
+large_all <- large_all[order(large_all$Price, decreasing=T),]
+max <- head(large_all,0.005*length(large_all$Price))$Price[order(head(large_all,0.005*length(large_all$Price))$Price)][1]
+
+large_all <- large_all[order(large_all$Price, decreasing=F),]
+min <- head(large_all,0.005*length(large_all$Price))$Price[order(head(large_all,0.005*length(large_all$Price))$Price, decreasing = T)][1]
+
+large_all_adj <- large_all[(large_all$Price) > min & (large_all$Price < max),]
+
+```
+
+Easy enough. Let's take a look at the remaining data via a histogram. We'll start by examining price in relation to both location and year, which we pre-suppose are likely to impact price heavily.
+
+```{r PriceSummary1, echo=F, fig.width=10, fig.align='center'}
+cols <- viridis(length(unique(large_all$County)))
+counties <- unique(large_all$County)
+counties <- counties[c(6,1,2,3,4,5,7)]
+names(cols) <- c("WILTSHIRE","SOMERSET","GLOUCESTERSHIRE","DORSET","DEVON","CORNWALL","AVON")
+
+g1 <- ggplot(large_all_adj, aes(x=Price/1000,fill=County)) + 
+          geom_histogram(bins = 200) + 
+          scale_fill_manual(values = cols) +
+          theme_minimal() +
+          xlab("Price (1000s of £s)")
+
+
+ggplotly(g1)
+
+```
+<br>
+We do see that price clearly increases year-on-year, but it is, of course, difficult to tell if this is the effect of inflation. Let's adjust our data using the CPI inflation index, re-filter and re-do the above graphs. 
+
+Another aspect of note is the visible impact of psychological price points, which can be most clearly seen on data that isn't yet adjusted for inflation. We observe large frequency peaks at £250, £375, £400 and £500 thousand, with smaller peaks visible at £350, £400, etc.
+
+Over the period 1995-2021, the most frequent price paid was roughly £200,000.
+
+```{r InflationFix, echo=F, fig.align='center'}
+
+large_all <- merge(large_all,inflate,by="Year")
+large_all$Price_Adj <- large_all$Price*large_all$Multiplier
+large_all$Year <- as.numeric(large_all$Year)
+
+large_all <- large_all[order(large_all$Price, decreasing=T),]
+max <- head(large_all,0.005*length(large_all$Price))$Price[order(head(large_all,0.005*length(large_all$Price))$Price)][1]
+
+large_all <- large_all[order(large_all$Price, decreasing=F),]
+min <- head(large_all,0.005*length(large_all$Price))$Price[order(head(large_all,0.005*length(large_all$Price))$Price, decreasing = T)][1]
+
+large_all_adj <- large_all[(large_all$Price) > min & (large_all$Price < max),]
+
+g1 <- ggplot(large_all_adj, aes(x=Price/1000,fill=County)) + 
+          geom_histogram(bins = 200) + 
+          scale_fill_manual(values = cols) +
+          theme_minimal() +
+          xlab("Price (1000s of £s)")
+
+ggplotly(g1)
+
+```
+<br>
+
+### Price Paid and Time Passed
+
+It does indeed look like we have a strong year-on-year house price increase even after inflation adjustment. Let's perform a very quick regression to see how significant that is.
+
+```{r Reg_on_year, fig.align='center'}
+
+large_all_monthly <- large_all_adj[,c(1,13,15)]
+large_all_monthly$label <- ym(paste(large_all_monthly$Year,large_all_monthly$Month,sep="-"))
+large_all_monthly$label <- gsub("(.*-.*)-.*","\\1",large_all_monthly$label)
+
+large_all_monthly_ag <- aggregate(Price_Adj~Year+Month+label,large_all_monthly,mean)
+large_all_monthly_ag$PlotMonth <- large_all_monthly_ag$Month+((large_all_monthly_ag$Year-1995)*12)
+
+g1 <- ggplot(large_all_monthly_ag, aes(x=PlotMonth,y=Price_Adj/1000,colour=Price_Adj, label=label)) + geom_smooth(method="lm", alpha=0.15, colour="grey") + 
+            geom_point() +
+            geom_smooth(aes(group=""), se=F)+ scale_color_viridis() + theme_minimal() + 
+            scale_x_continuous(breaks = c(seq(1,270,24)), labels = 1994+c(seq(1,23,2))) +
+            theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=1)) + theme(legend.position = "None") +
+            geom_vline(xintercept = 158, lty=2,lwd=0.75,alpha=0.25) + ylab("Price (1000s of £s)")
+
+ggplotly(g1)
+
+```
+<br>
+
+Ah! Taking a monthly average of the price shows us the real story - Prices are increasing over time, but increased most rapidly between 1995 and 2007, peaking immediately before the financial crash of 2008 and not returning to these levels until June 2021. We do see an interesting outlier in July 2021, where average price paid fell by several percent, before rising back to the mean. Here we have plotted the simple regression of price vs months since 1995, and also a loess regression for a more local visualisation.
+
+One other interesting observation we can make that is backed up by the real world advice is a fairly strong monthly bias. Let's take a closer look at that.
+
+```{r Monthly Bias, fig.align='center'}
+
+large_all_monthly_ag2 <- large_all_monthly_ag
+
+for(i in c(1995:2021)){
+  max <- max(large_all_monthly_ag[large_all_monthly_ag$Year==i,]$Price_Adj)
+  large_all_monthly_ag2[large_all_monthly_ag2$Year==i,]$Price_Adj <- large_all_monthly_ag2[large_all_monthly_ag2$Year==i,]$Price_Adj/max
+}
+
+g1 <- ggplot(large_all_monthly_ag2, aes(x=Month,y=Price_Adj,colour=Year)) + geom_smooth(aes(group=Year),se=F,alpha=0.75) + ylab("Price (Relative)") + 
+  scale_colour_viridis() + theme_minimal() + scale_x_continuous(breaks = c(1:12), labels = c("Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"))
+
+ggplotly(g1)
+
+
+```
+<br>
+
+Very clear! People are willing to spend more on a house in September - Nesting instinct for the winter, perhaps? This pattern is very consistent, only being broken in the years 2020 and 2021.
+
+### Location, location, location
+
+As well as time passing, we also expect location to have a very strong effect on prices, with homes in more desirable cities being consistently more expensive by  large factor. We have around 230 individual towns and cities in our dataset, which is a lot. We'll filter out the bottom locations by total purchases and then view the top and bottom 25 by average price. Our smallest location after this transformation is Lynmouth, with only 187 recorded sales between 1995 and 2021. The location with the most sales was, unsurprisingly, Bristol, with 413000 individual property sales.
+
+```{r Location, fig.align='center'}
+
+locFilt <- table(large_all_adj$`Town/City`)[order(table(large_all_adj$`Town/City`))][-c(1:40)]
+
+large_all_loc <- large_all_adj[large_all_adj$`Town/City` %in% names(locFilt),]
+
+large_all_loc_ag <- aggregate(Price_Adj~`Town/City`,large_all_loc,mean)
+large_all_loc_ag_y <- aggregate(Price_Adj~`Town/City`,large_all_loc,mean)
+
+large_all_loc_ag <- large_all_loc_ag[order(large_all_loc_ag$Price_Adj, decreasing = T),]
+
+large_all_loc_ag <- rbind(head(large_all_loc_ag,25),tail(large_all_loc_ag,25))
+
+large_all_loc_plot <- large_all_loc[large_all_loc$`Town/City` %in% large_all_loc_ag$`Town/City`,]
+
+large_all_loc_ag$`Town/City` <- factor(large_all_loc_ag$`Town/City`, levels =large_all_loc_ag[order(large_all_loc_ag$Price_Adj, decreasing = T),]$`Town/City`)
+large_all_loc_plot$`Town/City` <- factor(large_all_loc_plot$`Town/City`, levels =large_all_loc_ag[order(large_all_loc_ag$Price_Adj, decreasing = T),]$`Town/City`)
+
+g1 <- ggplot(large_all_loc_plot,aes(x=`Town/City`,y=Price_Adj/1000,fill=`Town/City`)) + geom_boxplot(outlier.shape = NA) + 
+  scale_fill_viridis(discrete = T, direction = -1)  + theme_minimal() + ylab("Price (1000s of £s)") + 
+            theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=1)) + ylim(c(0,1500))
+
+p <- ggplotly(g1) %>% layout(showlegend=F)
+
+for(i in 1:50){
+p$x$data[[i]]$marker$opacity = 0 
+}
+
+p
+```
+
+<br>
+
+Quite the gap between Salcombe and Ringwood versus Cinderford and St. Columb, with Salcombe having a mean price at roughly £630,000 and Cinderford at roughly £180,000. Bristol and Exeter, despite being the largest cities in the dataset, don't make it in to the top 25 most expensive locations, and are thus not displayed.
+
+### Other Parameters
+
+The othere parameters coming from our initial dataset include the type of property, whether the house is a new build, whether the house was bought on free- or leasehold and the PPDCategory, which indicates whether this property was category "A" - A standard, full price home sold for the market value and category "B" - Reposessions, buy-to-lets and transfers to non-private individuals, i.e., investment properties.
+
+Let's see if we can identify any clear indications that these factors affect price paid.
+
+```{r OtherParams, fig.width=10, fig.align='center'}
+
+large_all_adj$`Property Type` <- ifelse(large_all_adj$`Property Type` == "F", "Flat",
+                                        ifelse(large_all_adj$`Property Type` == "T", "Terraced",
+                                               ifelse(large_all_adj$`Property Type` == "S", "Semi-Detached",
+                                                      ifelse(large_all_adj$`Property Type` == "D", "Detached",
+                                                        ifelse(large_all_adj$`Property Type` == "O", "Other",NA)))))
+
+large_all_adj$`Old/New` <- ifelse(large_all_adj$`Old/New`=="Y","New","Old")
+
+large_all_adj$`Duration` <- ifelse(large_all_adj$`Duration`=="L","Leasehold",
+                                   ifelse(large_all_adj$`Duration`=="F","Freehold","Unknown"))
+
+large_all_adj$`PPDCategory Type` <- ifelse(large_all_adj$`PPDCategory Type`=="A","Standard (A)","Other (B)")
+
+```
+
+```{r Plot_four, echo=F, fig.width=16, fig.height=16, fig.align='center'}
+
+g1 <- ggplot(large_all_adj, aes(x=reorder(`Property Type`,Price_Adj),y=Price_Adj/1000,fill=`Property Type`)) + 
+  geom_boxplot(outlier.shape = NA) + ylim(c(0,1200)) + theme_minimal() + ylab("Price (1000s of £s)") + ggtitle("Property Category") + xlab("") +
+            theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=1, size = 3), legend.position = "None")
+
+g2 <- ggplot(large_all_adj, aes(x=reorder(`Old/New`,Price_Adj),y=Price_Adj/1000,fill=`Old/New`)) + 
+  geom_boxplot(outlier.shape = NA) + ylim(c(0,750)) + theme_minimal() + ylab("Price (1000s of £s)") + ggtitle("Old/New") + xlab("") +
+            theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=1, size = 3), legend.position = "None")
+
+g3 <- ggplot(large_all_adj[large_all_adj$Duration %in% c("Leasehold","Freehold"),], aes(x=reorder(`Duration`,Price_Adj),y=Price_Adj/1000,fill=`Duration`)) + 
+  geom_boxplot(outlier.shape = NA) + ylim(c(0,750)) + theme_minimal() + ylab("Price (1000s of £s)") + ggtitle("Duration (Lease/Free)") + xlab("") +
+            theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=1, size = 3), legend.position = "None")
+
+g4 <- ggplot(large_all_adj, aes(x=reorder(`PPDCategory Type`,Price_Adj),y=Price_Adj/1000,fill=`PPDCategory Type`)) + 
+  geom_boxplot(outlier.shape = NA) + ylim(c(0,800)) + theme_minimal() + ylab("Price (1000s of £s)") + ggtitle("PPD Category") + xlab("") +
+            theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=1, size = 3), legend.position = "None")
+
+grid.arrange(g1,g2,g3,g4)
+
+```
+
+<br>
+
+Some predictable and some unpredictable results here - Detached houses a clear winner. "Other" in this category indicates many different edge cases, for example where a property is attached to large parcels of land. Surprisingly, new builds had a slightly higher mean cost. Freeholds were more expensive. PPD Category is a tad nebulous, where it includes both repossessions and explicit buy-to-lets. It's relatively safe to assume that the majority of these purchases are investments, but it's worth bearing in mind.
+
+It might be interesting to see where the majortiy of investment capital into property ends up, both over time and by location. We'll look at the sum of total capital spent on investment in each town/city and view the top results.
+
+```{r Investments, echo=F, fig.align='center'}
+
+large_all_investment <- large_all_adj[large_all_adj$`PPDCategory Type`=="Other (B)",]
+
+large_all_investment_loc <- aggregate(Price_Adj~`Town/City`,large_all_investment,sum)
+large_all_investment_loc <- large_all_investment_loc[order(large_all_investment_loc$Price_Adj, decreasing=T),]
+
+large_all_investment_loc$`Town/City` <- factor(large_all_investment_loc$`Town/City`, 
+                                               levels = large_all_investment_loc[order(large_all_investment_loc$Price_Adj, decreasing = T),]$`Town/City`)
+
+g1 <- ggplot(head(large_all_investment_loc,20), aes(x=`Town/City`,y=Price_Adj/1000,fill=`Town/City`)) + geom_bar(stat="identity") + 
+              scale_fill_viridis(discrete = T, direction = -1) + theme_minimal() + ylab("Price (1000s of £s)") + 
+              theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=1), legend.position = "None") + xlab("")
+
+
+large_all_investment_yr <- aggregate(Price_Adj~Year,large_all_investment,sum)
+large_all_investment_yr <- large_all_investment_yr[order(large_all_investment_yr$Price_Adj, decreasing=T),]
+
+large_all_investment_yr$Year <- factor(large_all_investment_yr$Year, 
+                                               levels = large_all_investment_yr[order(large_all_investment_yr$Year, decreasing = F),]$Year)
+
+g2 <- ggplot(large_all_investment_yr, aes(x=Year,y=Price_Adj/1000,fill=Year)) + geom_bar(stat="identity") + 
+              scale_fill_viridis(discrete = T, direction = 1) + theme_minimal() + ylab("Price (1000s of £s)") + 
+              theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=1), legend.position = "None") + xlab("")
+
+grid.arrange(g1,g2,ncol=1)
+
+
+large_all_investment2 <- large_all_adj[!large_all_adj$`PPDCategory Type`=="Other (B)",]
+large_all_investment_yr2 <- aggregate(Price_Adj~Year,large_all_investment2,sum)
+
+```
+<br>
+
+That's a lot of money going into Bristol! In addition, we see a very rapid rise in buy-to-let property purchasing from 2013 onwards, only stalling in 2020. The lack of data before 2003 is likely just a gap in recordings, but the very, very low level of investment from 2008 through 2021 is likely a more genuine measure.
+
+Before we focus in on our external datasets, it might be useful to check if this accelerated investment has caused a noticable effect on our largest locations' average cost over time. Let's quickly check:
+
+```{r Locations_by_Time, echo=F}
+
+locFilt <- names(table(large_all_adj$`Town/City`)[order(table(large_all_adj$`Town/City`), decreasing = T)][c(1:20)])
+
+large_all_locyear <- large_all_adj[large_all_adj$`Town/City` %in% locFilt,]
+
+large_all_locyear_ag <- aggregate(Price_Adj~`Town/City`+Year,large_all_locyear,mean)
+
+for(i in locFilt){
+  
+  max <- large_all_locyear_ag[large_all_locyear_ag$`Town/City`== i & large_all_locyear_ag$Year==1995,]$Price_Adj
+  
+  large_all_locyear_ag[large_all_locyear_ag$`Town/City`==i,]$Price_Adj <- large_all_locyear_ag[large_all_locyear_ag$`Town/City`==i,]$Price_Adj/max
+}
+
+ggplot(large_all_locyear_ag, aes(x=Year,y=Price_Adj,colour=`Town/City`)) + geom_line() + theme_minimal() + ylab("Price (1000s of £s)") +  
+              theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=1), legend.position = "None") + xlab("") + ggtitle("Locations Over Time")
+
+```
+<br>
+Not really... The trend seemds very solid regardless of location.
+
+# 3. Time Series Prediction
+
+Using price data, we might hope to be able to predict future prices. Because we know that price changes are seasonal, we also ought to use a model that can account for this. In this case, we'll attempt to employ the SARIMAX (Seasonal Autoregressive Integrated Moving Average eXogenous) model.
+
+SARIMA is a machine learning method and is one of the most widely used forecasting tools. We will train the model on only part of our time-series, and compare its forecast of the final portion as our model's validation metric. 
+
+Let's start by considering just one city, our largest data point, Bristol:
+
+```{r TSA, echo=F}
+
+large_all_monthly_loc <- large_all_adj[,c(1,8,13,15)]
+large_all_monthly_loc$label <- ym(paste(large_all_monthly_loc$Year,large_all_monthly_loc$Month,sep="-"))
+large_all_monthly_loc$label <- gsub("(.*-.*)-.*","\\1",large_all_monthly_loc$label)
+colnames(large_all_monthly_loc)[2] <- "TownCity"
+
+large_all_monthly_loc_ag <- aggregate(Price_Adj~Year+Month+label+TownCity,large_all_monthly_loc,mean)
+large_all_monthly_loc_ag$PlotMonth <- large_all_monthly_loc_ag$Month+((large_all_monthly_loc_ag$Year-1995)*12)
+
+
+```
+SARIMAX is a complicated model, and we have 7 hyper parameters, or trend elements, which we must configure for our model to be effective:
+
+p: Trend Autoregressive Order
+q: Trend Moving Average Order
+d: Trend Difference Order
+P: Seasonal Autoregressive Order
+Q: Seasonal Moving Average Order
+D: Seasonal Difference Order
+m: The number of time steps contained within one seasonal period
+
+Our SARIMA model will be notated as SARIMA(p,d,q)(P,D,Q)m.
+
+Some of these are easier to solve than others. In our case, one season might be considered either 4 or 12 months. 
+
+In order to identify the other parameters, we must view both ACF and PACF plots and attempt to use these to inform the machine learning process. In addition to the univariate price, we will be providing the model information about the monthly UK inflation. We will also give the model information on the month of the year.
+
+Below, we see both of these time series plotted together.
+
+```{r SARIMAX2, echo=F}
+
+monthly_inflation <- read.csv("monthly_inflation - Sheet1.csv")
+colnames(monthly_inflation) <- gsub("X","",colnames(monthly_inflation))
+colnames(monthly_inflation)[1] <- "Month"
+
+month_melt <- melt(monthly_inflation,id.vars = "Month")
+month_melt$variable <- as.numeric(as.character(month_melt$variable))
+month_melt$PlotMonth <- month_melt$Month+(12*(month_melt$variable-1995))
+
+
+bris <- large_all_monthly_loc_ag[large_all_monthly_loc_ag$TownCity=="BRISTOL",c(5,6)]
+bris <- merge(bris,month_melt,by="PlotMonth")
+bris$value <- as.numeric(gsub("%","",bris$value))
+
+
+tsplot(bris[,c(2,5)], main = "Bristol Time-Series")
+
+```
+<br>
+
+Let's see if we can decompose our time series into underlying trends using the decompose function.
+
+```{r SARIMAX3, echo=F}
+
+bris_ts <-ts(bris[,2], frequency = 12, start = c(1995,1))
+
+bris_dec <- decompose(bris_ts)
+
+
+plot(bris_dec)
+
+```
+<br>
+
+If we attempt to remove the seasonal trend, we should have a more clear yearly trend...
+
+```{r SARIMAX5, echo=F}
+
+bris_SA <- bris_ts - bris_dec$seasonal
+
+plot.ts(bris_SA)
+
+```
+<br>
+
+Okay, so it's clear what kind of trends might be present in the overall data. Let's attept to initiate our SARIMAX model.
+
+
+```{r SARIMAX2 grid search, echo=F, message=F, warning=FALSE}
+
+suppressMessages(suppressWarnings(bristol_arima <- sarima(xdata = log(bris[,2]),0,1,2,2,0,2,12, gg=TRUE, col=4, xreg = bris[,c(5)])))
+
+y <- window(log(bris[,2]), start=1, end=300)
+
+suppressWarnings(y_pred <- sarima.for(xdata = y,0,1,2,2,0,2,12,n.ahead = 20, xreg =  window(bris[,c(5)], start = 1, end = 300), newxreg = window(bris[,c(5)], start = 300, end = 324)))
+text(285,12.9, "PAST")
+text(315, 12.9, "FUTURE")
+abline(v=300, lty=2, col=4)
+lines(log(bris[,2]))
+
+```
+<br>
+And there, in red, is our prediction compared to the observed values from 2019 and 2020. Not terrible, but not excellent... Either way, the model would have struggled to predict the large % dropoff in June 2020. Let's look deeper into the crystal ball.
+
+```{r SARIMA_Final, echo=F, message=F, warning=FALSE}
+
+sarima.for(xdata = log(bris[,2]),0,1,2,2,0,2,12,n.ahead = 60)
+abline(v=324, lty=2, col=4)
+
+```
